@@ -161,6 +161,17 @@ export async function showDiff() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// pushBranch(branchName)
+// Pushes the given branch to the "origin" remote and sets its upstream.
+// Throws if the remote is unreachable or the push is rejected.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function pushBranch(branchName) {
+  console.log(`\n[git] Pushing branch "${branchName}" to origin...`);
+  await git.push('origin', branchName, ['--set-upstream']);
+  console.log(`[git] ✅ Branch "${branchName}" published to origin.`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // checkoutMain() — internal helper
 // Checks out whichever protected branch exists (main preferred over master).
 // ─────────────────────────────────────────────────────────────────────────────

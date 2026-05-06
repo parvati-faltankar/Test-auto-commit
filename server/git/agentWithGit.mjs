@@ -34,6 +34,7 @@ import {
   commitChanges,
   rollback,
   showDiff,
+  pushBranch,
 } from './gitService.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -171,14 +172,17 @@ async function confirmWithUser(prompt) {
 //                             { success: boolean, message: string }.
 //                             Default: [runBuildValidator]
 //                             Extend: [runBuildValidator, runTestValidator]
+//     push         {boolean}  If true, push the AI branch to origin after all
+//                             validators pass. Default: false
 //
 // Returns:
-//   { success: boolean, branch: string, commit: string|null, error?: string }
+//   { success: boolean, branch: string, commit: string|null, pushUrl?: string, error?: string }
 // ─────────────────────────────────────────────────────────────────────────────
 export async function applyAIChange(task, applyChangesFn, options = {}) {
   const {
     confirm    = false,
     validators = [runBuildValidator],
+    push       = false,
   } = options;
 
   const branchName = `ai-change-${Date.now()}`;
@@ -259,16 +263,24 @@ export async function applyAIChange(task, applyChangesFn, options = {}) {
       }
     }
 
-    // All validators passed
+    // All validators passed — optionally push branch to remote
+    let pushUrl;
+    if (push) {
+      console.log(`\n[agent] Pushing branch to remote...`);
+      await pushBranch(branchName);
+      pushUrl = `origin/${branchName}`;
+    }
+
     console.log(`\n${'═'.repeat(60)}`);
     console.log(`[agent] 🎉 All done!`);
     console.log(`  Task:   ${task}`);
     console.log(`  Branch: ${branchName}`);
     console.log(`  Commit: ${commitHash}`);
+    if (pushUrl) console.log(`  Remote: ${pushUrl}`);
     console.log(`  Status: All ${validators.length} validator(s) passed.`);
     console.log(`${'═'.repeat(60)}\n`);
 
-    return { success: true, branch: branchName, commit: commitHash };
+    return { success: true, branch: branchName, commit: commitHash, pushUrl };
 
   } catch (err) {
     // Unexpected error — attempt rollback if a branch was created
