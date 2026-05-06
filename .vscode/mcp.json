@@ -1,0 +1,28 @@
+{
+  "servers": {
+    "auth": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "D:/ReactJs/projects/ReactJs/test/src"
+      ]
+    },
+    "mui-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mui/mcp@latest"
+      ]
+    },
+    "auth-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "D:/ReactJs/projects/ReactJs/test/server/mcp-server.js"
+      ]
+    }
+  }
+}
