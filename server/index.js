@@ -35,7 +35,6 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 app.use(cors(corsOptions));
-app.options("/{*path}", cors(corsOptions)); // Handle preflight for all routes
 app.use(express.json());
 
 // ── Auth Routes ─────────────────────────────
