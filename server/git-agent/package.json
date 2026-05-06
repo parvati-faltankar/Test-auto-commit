@@ -1,0 +1,48 @@
+{
+  "name": "@git-agent/core",
+  "version": "1.0.0",
+  "description": "Production-ready AI-powered Git agent with conflict resolution and automated commits",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "git-agent": "dist/cli/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli/cli.js",
+    "cli": "ts-node src/cli/cli.ts",
+    "dev": "ts-node src/cli/cli.ts",
+    "test": "jest",
+    "clean": "rm -rf dist node_modules"
+  },
+  "keywords": [
+    "git",
+    "agent",
+    "ai",
+    "openai",
+    "automation",
+    "conflict-resolution",
+    "commit"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "simple-git": "^3.20.0",
+    "axios": "^1.6.0",
+    "inquirer": "^8.2.5",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.5.0",
+    "@types/inquirer": "^8.2.5",
+    "typescript": "^5.1.0",
+    "ts-node": "^10.9.1",
+    "@types/jest": "^29.5.0",
+    "jest": "^29.6.0",
+    "ts-jest": "^29.1.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
