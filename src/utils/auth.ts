@@ -21,8 +21,23 @@ export const getToken = (): string | null => {
   return localStorage.getItem("token");
 };
 
+// Save/load user info
+export const saveUser = (user: User): void => {
+  localStorage.setItem("user", JSON.stringify(user));
+};
+
+export const getSavedUser = (): User | null => {
+  try {
+    const raw = localStorage.getItem("user");
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
+  }
+};
+
 export const logout = (): void => {
   localStorage.removeItem("token");
+  localStorage.removeItem("user");
 };
 
 // ── Register ─────────────────────────────────────────
@@ -54,6 +69,7 @@ export const loginWithUsername = async (
   const data: AuthResponse = await res.json();
   if (!res.ok) throw new Error(data.message);
   if (data.token) saveToken(data.token);
+  if (data.user) saveUser(data.user);
   return data;
 };
 
@@ -82,5 +98,6 @@ export const verifyOtp = async (
   const data: AuthResponse = await res.json();
   if (!res.ok) throw new Error(data.message);
   if (data.token) saveToken(data.token);
+  if (data.user) saveUser(data.user);
   return data;
 };

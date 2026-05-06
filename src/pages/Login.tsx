@@ -15,16 +15,24 @@ import {
 } from "@mui/material";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import PhoneAndroidIcon from "@mui/icons-material/PhoneAndroid";
-import { loginWithUsername, sendOtp, verifyOtp } from "../utils/auth";
+import { loginWithUsername, sendOtp, verifyOtp, getSavedUser, getToken } from "../utils/auth";
+import { useAuth } from "../context/AuthContext";
 
 type OtpStep = "mobile" | "otp";
 
 
 export default function Login() {
   const navigate = useNavigate();
+  const { login, isAuthenticated } = useAuth();
   const [tab, setTab] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Redirect if already logged in
+  if (isAuthenticated) {
+    navigate("/success", { replace: true });
+    return null;
+  }
 
   // Username/password state
   const [credentials, setCredentials] = useState({ username: "", password: "" });
@@ -45,7 +53,8 @@ export default function Login() {
     try {
       setLoading(true);
       setError("");
-      await loginWithUsername(credentials.username, credentials.password);
+      const res = await loginWithUsername(credentials.username, credentials.password);
+      if (res.token && res.user) login(res.token, res.user);
       navigate("/success");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed.");
@@ -81,6 +90,9 @@ export default function Login() {
       setLoading(true);
       setError("");
       await verifyOtp(mobile, otp);
+      const saved = getSavedUser();
+      const tok = getToken();
+      if (tok && saved) login(tok, saved);
       navigate("/success");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "OTP verification failed.");

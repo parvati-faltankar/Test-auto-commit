@@ -158,6 +158,44 @@ router.post("/login/otp/verify", async (req, res) => {
   }
 });
 
+const verifyToken = require("../middleware/verifyToken");
+
+// ─────────────────────────────────────────
+// PUT /api/profile  (update profile)
+// ─────────────────────────────────────────
+router.put("/profile", verifyToken, async (req, res) => {
+  try {
+    const { newUsername, newMobile } = req.body;
+
+    if (!newUsername && !newMobile) {
+      return res.status(400).json({ message: "Provide at least one field to update." });
+    }
+
+    if (newUsername && newUsername.length < 3) {
+      return res.status(400).json({ message: "Username must be at least 3 characters." });
+    }
+
+    if (newMobile && !/^\d{10}$/.test(newMobile)) {
+      return res.status(400).json({ message: "Mobile must be a valid 10-digit number." });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found." });
+
+    if (newUsername) user.username = newUsername;
+    if (newMobile) user.mobile = newMobile;
+    await user.save();
+
+    res.json({
+      message: "Profile updated successfully.",
+      user: { username: user.username, mobile: user.mobile },
+    });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ message: "Server error updating profile." });
+  }
+});
+
 // ─────────────────────────────────────────
 // GET /api/users  (list all users)
 // ─────────────────────────────────────────
