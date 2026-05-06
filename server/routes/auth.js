@@ -158,4 +158,30 @@ router.post("/login/otp/verify", async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────
+// GET /api/users  (list all users)
+// ─────────────────────────────────────────
+router.get("/users", async (req, res) => {
+  try {
+    const users = await User.find({}, "username mobile createdAt").sort({ createdAt: -1 });
+
+    if (users.length === 0) {
+      return res.json({ message: "No users registered yet.", users: [] });
+    }
+
+    res.json({
+      message: `Found ${users.length} user(s)`,
+      count: users.length,
+      users: users.map((u) => ({
+        username: u.username,
+        mobile: u.mobile,
+        joined: u.createdAt?.toDateString() || "unknown",
+      })),
+    });
+  } catch (err) {
+    console.error("List users error:", err);
+    res.status(500).json({ message: "Server error fetching users." });
+  }
+});
+
 module.exports = router;
