@@ -8,6 +8,8 @@ import { AIService } from './ai.service';
 import { ConflictResolver } from './conflict-resolver';
 import { AgentConfig, AgentResult, OperationLog } from '../types';
 import { GitAgentError, RollbackError } from '../utils/errors';
+import { execSync } from 'child_process';
+import fs from 'fs';
 
 export class GitAgent {
   private config: AgentConfig;
@@ -211,6 +213,9 @@ export class GitAgent {
         return 'no-commit';
       }
 
+      // Validate pre-commit checks
+      await this.runPreCommitValidation();
+
       // Get diff for AI analysis
       const diff = await this.gitService.getDiff(true);
 
@@ -243,6 +248,104 @@ export class GitAgent {
     } catch (error) {
       this.logOperation('commit', 'failed', `${error}`);
       throw error;
+    }
+  }
+
+  /**
+   * Run pre-commit validation checks
+   */
+  private async runPreCommitValidation(): Promise<void> {
+    this.logger.section('🔍 Running Pre-Commit Validation');
+
+    try {
+      // Check for secrets in staged files
+      await this.detectSecrets();
+
+      // Run build check
+      await this.validateBuild();
+
+      this.logger.success('✅ Pre-commit validation passed');
+    } catch (error) {
+      throw new GitAgentError(
+        `Pre-commit validation failed: ${error instanceof Error ? error.message : error}`
+      );
+    }
+  }
+
+  /**
+   * Detect common secrets in staged changes
+   */
+  private async detectSecrets(): Promise<void> {
+    this.logger.info('Scanning for secrets...');
+
+    try {
+      const secretPatterns = {
+        'API Keys': /(?:api[_-]?key|apikey|api_secret)[\s]*[:=][\s]*['\"]?([a-zA-Z0-9\-_.]{20,})['\"]?/gi,
+        'AWS Keys': /(?:AKIA|aws_secret_access_key)[\s]*[:=]/gi,
+        'Private Keys': /-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY/gi,
+        'Tokens': /(?:token|auth|bearer)[\s]*[:=][\s]*['\"]?([a-zA-Z0-9\-_.]{30,})['\"]?/gi,
+        'Passwords': /(?:password|passwd|pwd)[\s]*[:=][\s]*['\"]([^'\"]{6,})['\"]?/gi,
+      };
+
+      const diff = await this.gitService.getDiff(true);
+      const lines = diff.diff.split('\n');
+
+      let secretsFound = false;
+      for (const [secretType, pattern] of Object.entries(secretPatterns)) {
+        for (const line of lines) {
+          if (pattern.test(line)) {
+            this.logger.warn(`⚠️  Potential ${secretType} detected in diff`);
+            secretsFound = true;
+            break;
+          }
+        }
+      }
+
+      if (secretsFound) {
+        throw new GitAgentError(
+          'Secrets detected in staged changes. Please remove them before committing.'
+        );
+      }
+
+      this.logger.success('✅ No secrets detected');
+    } catch (error) {
+      if (error instanceof GitAgentError) throw error;
+      this.logger.debug(`Secret detection warning: ${error}`);
+    }
+  }
+
+  /**
+   * Validate that code builds successfully
+   */
+  private async validateBuild(): Promise<void> {
+    this.logger.info('Validating build...');
+
+    try {
+      const packageJsonPath = `${this.config.repoPath}/package.json`;
+      
+      if (!fs.existsSync(packageJsonPath)) {
+        this.logger.debug('No package.json found, skipping build check');
+        return;
+      }
+
+      // Try to run build/check script if it exists
+      try {
+        this.logger.debug('Running pre-commit build check...');
+        execSync('npm run check 2>&1', {
+          cwd: this.config.repoPath,
+          stdio: 'pipe',
+          timeout: 60000, // 60 second timeout
+        });
+        this.logger.success('✅ Build validation passed');
+      } catch (buildError: any) {
+        const errorOutput = buildError.stdout?.toString() || buildError.stderr?.toString() || buildError.message;
+        throw new GitAgentError(
+          `Build validation failed. Please fix the following errors:\n${errorOutput}`
+        );
+      }
+    } catch (error) {
+      if (error instanceof GitAgentError) throw error;
+      this.logger.warn(`Build check not available: ${error}`);
     }
   }
 
