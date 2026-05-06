@@ -1,31 +1,25 @@
-/**
+﻿/**
  * agentWithGit.mjs
- * ─────────────────────────────────────────────────────────────────────────────
  * High-level AI agent lifecycle manager with Git integration.
  *
- * Full lifecycle per AI task:
- *   1. Safety check (never run on main/master)
- *   2. Create isolated branch  → ai-change-{timestamp}
- *   3. Call applyChangesFn    → AI edits files (receives diffHelper)
- *   4. Show diff preview      → line-by-line colour output
- *   5. Optional confirmation  → readline prompt before commit
- *   6. Commit                 → "AI: {task description}"
- *   7. Validation pipeline    → extensible array of validators
- *   8. Rollback on failure    → safe reset + return to main
- *
- * Usage from CJS (server/agent.js):
- *   const { applyAIChange } = await import('./git/agentWithGit.mjs');
- *
- * Usage from another ESM file:
- *   import { applyAIChange } from './git/agentWithGit.mjs';
- * ─────────────────────────────────────────────────────────────────────────────
+ * Full lifecycle:
+ *   0    Safety check        (refuse to start on main/master)
+ *   0.5  Sync with parent    (pull latest + merge into AI branch)
+ *   1    Create AI branch    ai-change-{timestamp}
+ *   1.5  Merge parent        Interactive conflict resolution per file
+ *   2    Apply AI changes    applyChangesFn(diffHelper)
+ *   3    Diff preview        line-by-line colour output
+ *   4    Confirmation        optional readline y/N
+ *   5    Commit              "AI: {task}"
+ *   6    Validate            extensible validator pipeline
+ *   7    Push (optional)     publish branch to origin
+ *   8    Rollback on fail    safe reset + return to main
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { createInterface } from 'readline';
-import * as diffLib from 'diff';
-import path from 'path';
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { createInterface } from "readline";
+import * as diffLib from "diff";
 
 import {
   PROJECT_ROOT,
@@ -34,293 +28,292 @@ import {
   commitChanges,
   rollback,
   showDiff,
-} from './gitService.mjs';
+  pushBranch,
+  getParentBranch,
+  pullLatest,
+  mergeWithInteractiveResolution,
+} from "./gitService.mjs";
 
 const execFileAsync = promisify(execFile);
-
-// ── Protected branches — mirrored here for the lifecycle guard ────────────────
-const PROTECTED_BRANCHES = ['main', 'master'];
+const PROTECTED_BRANCHES = ["main", "master"];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// diffHelper
-// Passed into applyChangesFn so the AI/caller can preview individual file
-// changes BEFORE they are written — purely for logging.
-//
-// Usage inside applyChangesFn:
-//   diffHelper.previewChange('src/App.tsx', oldContent, newContent);
+// diffHelper — passed into applyChangesFn for pre-write preview
 // ─────────────────────────────────────────────────────────────────────────────
 export const diffHelper = {
-  /**
-   * previewChange(filePath, oldContent, newContent)
-   * Computes a line-by-line diff and logs added/removed lines with colour.
-   */
   previewChange(filePath, oldContent, newContent) {
-    console.log(`\n[diff] ──── ${filePath} ─────────────────────────────`);
-    const changes = diffLib.diffLines(oldContent ?? '', newContent ?? '');
-
+    console.log("\n[diff] ---- " + filePath + " ----");
+    const changes = diffLib.diffLines(oldContent || "", newContent || "");
     if (changes.length === 1 && !changes[0].added && !changes[0].removed) {
-      console.log(`[diff] No changes in this file.`);
-      return;
+      console.log("[diff] No changes."); return;
     }
-
     for (const part of changes) {
-      const prefix = part.added ? '+' : part.removed ? '-' : ' ';
-      const colour = part.added ? '\x1b[32m' : part.removed ? '\x1b[31m' : '\x1b[0m';
-      const reset  = '\x1b[0m';
-
-      // Print each line of the chunk with its prefix
-      const lines = part.value.split('\n');
-      // Remove trailing empty string caused by final newline split
-      if (lines[lines.length - 1] === '') lines.pop();
-      for (const line of lines) {
-        console.log(`${colour}${prefix} ${line}${reset}`);
-      }
+      const prefix = part.added ? "+" : part.removed ? "-" : " ";
+      const colour = part.added ? "\x1b[32m" : part.removed ? "\x1b[31m" : "\x1b[0m";
+      const lines  = part.value.split("\n");
+      if (lines[lines.length - 1] === "") lines.pop();
+      for (const line of lines) process.stdout.write(colour + prefix + " " + line + "\x1b[0m\n");
     }
-
-    console.log(`[diff] ────────────────────────────────────────────────────`);
+    console.log("[diff] " + "-".repeat(50));
   },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// runBuildValidator()
-// Runs `npm run build` in the project root.
-// Returns { success: boolean, message: string }
+// runBuildValidator — npm run build in project root
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runBuildValidator() {
-  console.log(`\n[validate] Running build: npm run build`);
+  console.log("\n[validate] Running: npm run build");
   try {
-    const { stdout, stderr } = await execFileAsync(
-      'npm',
-      ['run', 'build'],
-      {
-        cwd: PROJECT_ROOT,
-        shell: true,           // required on Windows
-        timeout: 120_000,      // 2-minute hard cap
-      }
-    );
-    if (stdout) console.log(`[build]\n${stdout}`);
-    if (stderr) console.log(`[build:stderr]\n${stderr}`);
-    console.log(`[validate] ✅ Build passed.`);
-    return { success: true, message: 'Build passed.' };
+    const { stdout, stderr } = await execFileAsync("npm", ["run", "build"], { cwd: PROJECT_ROOT, shell: true, timeout: 120000 });
+    if (stdout) console.log("[build]\n" + stdout);
+    if (stderr) console.log("[build:stderr]\n" + stderr);
+    console.log("[validate] Build passed.");
+    return { success: true, message: "Build passed." };
   } catch (err) {
-    const output = (err.stdout ?? '') + '\n' + (err.stderr ?? '');
-    console.error(`[validate] ❌ Build failed:\n${output}`);
-    return { success: false, message: `Build failed:\n${output.trim()}` };
+    const output = (err.stdout || "") + "\n" + (err.stderr || "");
+    console.error("[validate] Build FAILED:\n" + output);
+    return { success: false, message: "Build failed:\n" + output.trim() };
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// runTestValidator()
-// Bonus: Runs `npm test` in the project root.
-// Skips gracefully if no "test" script is defined.
-// Returns { success: boolean, message: string }
+// runTestValidator — npm test --if-present
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runTestValidator() {
-  console.log(`\n[validate] Running tests: npm test`);
+  console.log("\n[validate] Running: npm test");
   try {
-    const { stdout, stderr } = await execFileAsync(
-      'npm',
-      ['test', '--if-present'],   // --if-present skips when no test script
-      {
-        cwd: PROJECT_ROOT,
-        shell: true,
-        timeout: 180_000,          // 3-minute hard cap
-      }
-    );
-    if (stdout) console.log(`[test]\n${stdout}`);
-    if (stderr) console.log(`[test:stderr]\n${stderr}`);
-    console.log(`[validate] ✅ Tests passed.`);
-    return { success: true, message: 'Tests passed.' };
+    const { stdout, stderr } = await execFileAsync("npm", ["test", "--if-present"], { cwd: PROJECT_ROOT, shell: true, timeout: 180000 });
+    if (stdout) console.log("[test]\n" + stdout);
+    if (stderr) console.log("[test:stderr]\n" + stderr);
+    console.log("[validate] Tests passed.");
+    return { success: true, message: "Tests passed." };
   } catch (err) {
-    const output = (err.stdout ?? '') + '\n' + (err.stderr ?? '');
-    console.error(`[validate] ❌ Tests failed:\n${output}`);
-    return { success: false, message: `Tests failed:\n${output.trim()}` };
+    const output = (err.stdout || "") + "\n" + (err.stderr || "");
+    console.error("[validate] Tests FAILED:\n" + output);
+    return { success: false, message: "Tests failed:\n" + output.trim() };
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// confirmWithUser(prompt)
-// Pauses execution and asks the user a yes/no question in the terminal.
-// Returns true if user types 'y' or 'yes' (case-insensitive).
+// askQuestion(prompt) — generic readline prompt, returns trimmed string
+// ─────────────────────────────────────────────────────────────────────────────
+function askQuestion(prompt) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => { rl.close(); resolve(answer.trim()); });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// askConflictResolution(filePath, parentBranch, currentBranch)
+//
+// Interactive prompt shown once per conflicting file. Returns:
+//   "ours"   — keep the AI branch version
+//   "theirs" — keep the parent branch version
+//   "manual" — leave conflict markers for hand-editing
+// ─────────────────────────────────────────────────────────────────────────────
+async function askConflictResolution(filePath, parentBranch, currentBranch) {
+  console.log("\n" + "=".repeat(60));
+  console.log("[conflict] File: " + filePath);
+  console.log("=".repeat(60));
+  console.log("  [1] Keep OURS   — keep AI branch version (" + currentBranch + ")");
+  console.log("  [2] Keep THEIRS — keep parent version     (" + parentBranch + ")");
+  console.log("  [3] Manual      — open file yourself and remove conflict markers");
+  console.log("=".repeat(60));
+
+  let answer = "";
+  while (!["1", "2", "3"].includes(answer)) {
+    answer = await askQuestion("  Your choice [1/2/3]: ");
+    if (!["1", "2", "3"].includes(answer)) {
+      console.log("  Invalid choice. Please enter 1, 2, or 3.");
+    }
+  }
+
+  const map = { "1": "ours", "2": "theirs", "3": "manual" };
+  const choice = map[answer];
+  const label  = { ours: "Keep OURS (AI branch)", theirs: "Keep THEIRS (parent)", manual: "Manual resolve" }[choice];
+  console.log("  -> " + label);
+  return choice;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// confirmWithUser(prompt) — yes/no prompt, returns boolean
 // ─────────────────────────────────────────────────────────────────────────────
 async function confirmWithUser(prompt) {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(`\n${prompt} [y/N]: `, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes');
-    });
-  });
+  const answer = await askQuestion("\n" + prompt + " [y/N]: ");
+  return answer.toLowerCase() === "y" || answer.toLowerCase() === "yes";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // applyAIChange(task, applyChangesFn, options)
-// ─────────────────────────────────────────────────────────────────────────────
-// Parameters:
-//   task           {string}   Human-readable description → used in commit msg
-//   applyChangesFn {Function} Async function that performs the actual file edits.
-//                             Receives (diffHelper) so it can preview changes.
-//   options        {Object}
-//     confirm      {boolean}  If true, pause and ask for confirmation before commit.
-//                             Default: false (non-interactive / CI-safe)
-//     validators   {Array}    Array of async validator functions, each returning
-//                             { success: boolean, message: string }.
-//                             Default: [runBuildValidator]
-//                             Extend: [runBuildValidator, runTestValidator]
 //
-// Returns:
-//   { success: boolean, branch: string, commit: string|null, error?: string }
+// options:
+//   syncWithParent {boolean} Pull + merge parent before editing. Default: false
+//   confirm        {boolean} Ask y/N before committing.          Default: false
+//   validators     {Array}   Validator fns -> { success, message }
+//   push           {boolean} Push branch to origin after success. Default: false
+//
+// Returns: { success, branch, commit, pushUrl?, parentPull?, error? }
 // ─────────────────────────────────────────────────────────────────────────────
 export async function applyAIChange(task, applyChangesFn, options = {}) {
   const {
-    confirm    = false,
-    validators = [runBuildValidator],
+    syncWithParent = false,
+    confirm        = false,
+    validators     = [runBuildValidator],
+    push           = false,
   } = options;
 
-  const branchName = `ai-change-${Date.now()}`;
-  let commitHash   = null;
-  let branchCreated = false;
+  const branchName   = "ai-change-" + Date.now();
+  let commitHash     = null;
+  let branchCreated  = false;
+  let parentPull     = null;
 
-  console.log(`\n${'═'.repeat(60)}`);
-  console.log(`[agent] 🤖 Starting AI task: "${task}"`);
-  console.log(`${'═'.repeat(60)}`);
+  console.log("\n" + "=".repeat(60));
+  console.log("[agent] Starting AI task: " + task);
+  console.log("=".repeat(60));
 
-  // ── Step 0: Safety guard — refuse to run on protected branches ─────────────
-  const currentBranch = await getCurrentBranch();
-  if (PROTECTED_BRANCHES.includes(currentBranch)) {
-    // If someone starts this while on main, move to a new branch first
-    // rather than erroring — safer UX
-    console.log(
-      `[agent] ⚠️  Currently on protected branch "${currentBranch}". ` +
-      `Will create a new AI branch before making any changes.`
-    );
+  const startBranch = await getCurrentBranch();
+  if (PROTECTED_BRANCHES.includes(startBranch)) {
+    console.log("[agent] On protected branch " + startBranch + ". A new AI branch will be created.");
   }
 
   try {
-    // ── Step 1: Create isolated branch ─────────────────────────────────────
-    console.log(`\n[agent] Step 1/6 — Creating branch...`);
+    // -- Step 0.5: Pull latest from parent ------------------------------------
+    if (syncWithParent) {
+      console.log("\n[agent] Step 0.5 - Syncing with parent branch...");
+      const parentBranch = await getParentBranch();
+      parentPull = await pullLatest(parentBranch);
+      if (parentPull.before !== parentPull.after) {
+        console.log("[agent] Pulled new commits from " + parentBranch);
+      } else {
+        console.log("[agent] " + parentBranch + " already up to date.");
+      }
+    } else {
+      console.log("\n[agent] Step 0.5 - Skipped (syncWithParent=false).");
+    }
+
+    // -- Step 1: Create isolated AI branch ------------------------------------
+    console.log("\n[agent] Step 1/6 - Creating branch: " + branchName);
     await createBranch(branchName);
     branchCreated = true;
 
-    // ── Step 2: Apply AI changes ────────────────────────────────────────────
-    console.log(`\n[agent] Step 2/6 — Applying AI changes...`);
-    await applyChangesFn(diffHelper);
-    console.log(`[agent] ✅ AI changes applied.`);
+    // -- Step 1.5: Merge parent into AI branch (interactive if conflicts) -----
+    if (syncWithParent) {
+      const parentBranch = await getParentBranch();
+      console.log("\n[agent] Step 1.5 - Merging " + parentBranch + " into AI branch...");
 
-    // ── Step 3: Show diff preview ───────────────────────────────────────────
-    console.log(`\n[agent] Step 3/6 — Showing diff preview...`);
-    await showDiff();
+      const mergeResult = await mergeWithInteractiveResolution(parentBranch, askConflictResolution);
 
-    // ── Step 4: Optional user confirmation ─────────────────────────────────
-    if (confirm) {
-      console.log(`\n[agent] Step 4/6 — Awaiting confirmation...`);
-      const approved = await confirmWithUser(
-        `Proceed with committing these changes for task "${task}"?`
-      );
-      if (!approved) {
-        console.log(`[agent] ❌ User rejected changes. Discarding and returning to main.`);
-        // Discard all changes and return to main — no commit was made
-        await rollback();
-        return { success: false, branch: branchName, commit: null, error: 'Rejected by user.' };
-      }
-      console.log(`[agent] ✅ User confirmed.`);
-    } else {
-      console.log(`\n[agent] Step 4/6 — Confirmation skipped (confirm=false).`);
-    }
-
-    // ── Step 5: Commit ──────────────────────────────────────────────────────
-    console.log(`\n[agent] Step 5/6 — Committing changes...`);
-    commitHash = await commitChanges(task);
-
-    // ── Step 6: Validation pipeline ─────────────────────────────────────────
-    console.log(`\n[agent] Step 6/6 — Running validation pipeline (${validators.length} validator(s))...`);
-
-    for (let i = 0; i < validators.length; i++) {
-      const validator = validators[i];
-      console.log(`\n[agent]   Validator ${i + 1}/${validators.length}: ${validator.name || 'anonymous'}`);
-
-      const result = await validator();
-
-      if (!result.success) {
-        // Validation failed — rollback and abort
-        console.error(`\n[agent] ❌ Validation failed: ${result.message}`);
-        console.log(`[agent] 🔄 Triggering rollback...`);
-        await rollback();
+      if (!mergeResult.completed) {
+        // User chose "manual" for some files — merge is in-progress, paused
+        console.log("\n[agent] Merge paused. " + mergeResult.manual.length + " file(s) need manual resolution:");
+        for (const f of mergeResult.manual) console.log("         * " + f);
+        console.log("\n[agent] Steps to resume:");
+        console.log("  1. Open each conflicting file and remove <<<<<<< ======= >>>>>>> markers");
+        console.log("  2. git add .");
+        console.log("  3. git commit --no-edit");
+        console.log("  4. Re-run this script");
         return {
           success: false,
           branch:  branchName,
           commit:  null,
-          error:   `Validation failed (${validator.name || `validator-${i + 1}`}): ${result.message}`,
+          error:   "Merge paused: manual conflict resolution required in " + mergeResult.manual.join(", "),
+          manual:  mergeResult.manual,
         };
       }
-    }
 
-    // All validators passed
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log(`[agent] 🎉 All done!`);
-    console.log(`  Task:   ${task}`);
-    console.log(`  Branch: ${branchName}`);
-    console.log(`  Commit: ${commitHash}`);
-    console.log(`  Status: All ${validators.length} validator(s) passed.`);
-    console.log(`${'═'.repeat(60)}\n`);
-
-    return { success: true, branch: branchName, commit: commitHash };
-
-  } catch (err) {
-    // Unexpected error — attempt rollback if a branch was created
-    console.error(`\n[agent] 💥 Unexpected error: ${err.message}`);
-
-    if (branchCreated) {
-      try {
-        console.log(`[agent] 🔄 Attempting emergency rollback...`);
-        await rollback();
-      } catch (rollbackErr) {
-        console.error(`[agent] ⚠️  Rollback also failed: ${rollbackErr.message}`);
-        console.error(`[agent] ⚠️  Manual intervention may be required. Branch: ${branchName}`);
+      if (mergeResult.resolved.length > 0) {
+        console.log("[agent] Merge complete. Resolved " + mergeResult.resolved.length + " conflict(s):");
+        for (const r of mergeResult.resolved) {
+          console.log("         * " + r.file + " -> " + (r.resolution === "ours" ? "kept AI version" : "kept parent version"));
+        }
       }
     }
 
-    return {
-      success: false,
-      branch:  branchName,
-      commit:  null,
-      error:   err.message,
-    };
+    // -- Step 2: Apply AI changes ---------------------------------------------
+    console.log("\n[agent] Step 2/6 - Applying AI changes...");
+    await applyChangesFn(diffHelper);
+    console.log("[agent] AI changes applied.");
+
+    // -- Step 3: Diff preview -------------------------------------------------
+    console.log("\n[agent] Step 3/6 - Diff preview:");
+    await showDiff();
+
+    // -- Step 4: Optional user confirmation -----------------------------------
+    if (confirm) {
+      console.log("\n[agent] Step 4/6 - Awaiting confirmation...");
+      const approved = await confirmWithUser("Commit these changes for task: \"" + task + "\"?");
+      if (!approved) {
+        console.log("[agent] Rejected by user. Rolling back...");
+        await rollback();
+        return { success: false, branch: branchName, commit: null, error: "Rejected by user." };
+      }
+      console.log("[agent] User confirmed.");
+    } else {
+      console.log("\n[agent] Step 4/6 - Confirmation skipped.");
+    }
+
+    // -- Step 5: Commit -------------------------------------------------------
+    console.log("\n[agent] Step 5/6 - Committing...");
+    commitHash = await commitChanges(task);
+
+    // -- Step 6: Validation pipeline ------------------------------------------
+    console.log("\n[agent] Step 6/6 - Validation (" + validators.length + " validator(s))...");
+    for (let i = 0; i < validators.length; i++) {
+      const validator = validators[i];
+      console.log("\n[agent]   Validator " + (i + 1) + "/" + validators.length + ": " + (validator.name || "anonymous"));
+      const result = await validator();
+      if (!result.success) {
+        console.error("[agent] Validation FAILED: " + result.message);
+        await rollback();
+        return { success: false, branch: branchName, commit: null, error: "Validation failed: " + result.message };
+      }
+    }
+
+    // -- Push (optional) -------------------------------------------------------
+    let pushUrl;
+    if (push) {
+      console.log("\n[agent] Pushing branch...");
+      await pushBranch(branchName);
+      pushUrl = "origin/" + branchName;
+    }
+
+    console.log("\n" + "=".repeat(60));
+    console.log("[agent] Done!");
+    console.log("  Task:   " + task);
+    console.log("  Branch: " + branchName);
+    console.log("  Commit: " + commitHash);
+    if (pushUrl)    console.log("  Remote: " + pushUrl);
+    if (parentPull) console.log("  Parent: " + parentPull.branch + " (" + parentPull.before.slice(0, 7) + " -> " + parentPull.after.slice(0, 7) + ")");
+    console.log("  Status: All " + validators.length + " validator(s) passed.");
+    console.log("=".repeat(60) + "\n");
+
+    return { success: true, branch: branchName, commit: commitHash, pushUrl, parentPull };
+
+  } catch (err) {
+    console.error("\n[agent] Error: " + err.message);
+    if (branchCreated) {
+      try { await rollback(); } catch (re) {
+        console.error("[agent] Rollback also failed: " + re.message);
+        console.error("[agent] Manual intervention needed. Branch: " + branchName);
+      }
+    }
+    return { success: false, branch: branchName, commit: null, error: err.message };
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// USAGE EXAMPLES
-// ─────────────────────────────────────────────────────────────────────────────
+// USAGE EXAMPLES:
 //
-// ── From ESM (another .mjs file) ─────────────────────────────────────────────
+// Basic:
+//   await applyAIChange("Update header", async (dh) => { /* edit files */ });
 //
-// import { applyAIChange, runBuildValidator, runTestValidator } from './git/agentWithGit.mjs';
-// import fs from 'fs/promises';
+// With interactive conflict resolution:
+//   await applyAIChange("Update header", async (dh) => { /* edit files */ }, {
+//     syncWithParent: true,   // pull main, merge -> prompts user per conflicting file
+//     confirm:        true,   // ask before committing
+//     validators:     [runBuildValidator, runTestValidator],
+//     push:           true,
+//   });
 //
-// await applyAIChange(
-//   'Update App title to Hello World',
-//   async (diffHelper) => {
-//     const filePath = 'src/App.tsx';
-//     const old = await fs.readFile(filePath, 'utf-8');
-//     const updated = old.replace('Vite + React', 'Hello World');
-//     diffHelper.previewChange(filePath, old, updated);   // preview before writing
-//     await fs.writeFile(filePath, updated, 'utf-8');
-//   },
-//   {
-//     confirm:    true,                                   // pause for user approval
-//     validators: [runBuildValidator, runTestValidator],  // run build + tests
-//   }
-// );
-//
-// ── From CJS (server/agent.js) ────────────────────────────────────────────────
-//
-// async function runWithGit() {
-//   const { applyAIChange } = await import('./git/agentWithGit.mjs');
-//   await applyAIChange('My task', async (diffHelper) => { /* edits */ });
-// }
-// runWithGit();
+// From CJS (server/agent.js):
+//   const { applyAIChange } = await import("./git/agentWithGit.mjs");
