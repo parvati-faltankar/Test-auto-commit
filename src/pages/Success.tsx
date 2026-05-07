@@ -1,11 +1,8 @@
-import { useNavigate } from "react-router-dom";
-import { Box, Button, Paper, Typography, Container } from "@mui/material";
+import { Box, Paper, Typography, Container } from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import { logout } from "../utils/auth";
 import Chatbot from "../components/Chatbot";
 
 export default function Success() {
-  const navigate = useNavigate();
 
   return (
     <Box
@@ -33,7 +30,7 @@ export default function Success() {
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
               You are now logged in. Welcome! Use the assistant on the right to navigate the app.
             </Typography>
-            <Button
+            {/* <Button
               variant="outlined"
               onClick={() => {
                 logout();
@@ -41,7 +38,7 @@ export default function Success() {
               }}
             >
               Logout
-            </Button>
+            </Button> */}
           </Paper>
 
           {/* Chatbot */}

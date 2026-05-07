@@ -12,6 +12,7 @@ import SendIcon from "@mui/icons-material/Send";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { logout as clearAuth } from "../utils/auth";
 
 interface Message {
   id: string;
@@ -70,15 +71,27 @@ export default function Chatbot() {
         },
         body: JSON.stringify({
           message: input,
-          conversationHistory: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
         }),
       });
 
       if (!response.ok) throw new Error("Chat failed");
       const data = await response.json();
+
+      // Handle logout action
+      if (data.action === "logout") {
+        const assistantMessage: Message = {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: "Logging you out...",
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setTimeout(() => {
+          clearAuth();
+          navigate("/login");
+        }, 1000);
+        return;
+      }
 
       // Handle navigation actions
       if (data.action === "navigate") {

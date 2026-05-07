@@ -1,245 +1,132 @@
 const express = require("express");
-const OpenAI = require("openai").default;
 const verifyToken = require("../middleware/verifyToken");
 const User = require("../models/User");
 
 const router = express.Router();
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
-// Define tools that the assistant can use
-const tools = [
-  {
-    type: "function",
-    function: {
-      name: "get_user_profile",
-      description: "Get the current user's profile information",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "update_user_profile",
-      description: "Update the current user's profile (username or mobile)",
-      parameters: {
-        type: "object",
-        properties: {
-          username: {
-            type: "string",
-            description: "New username (must be at least 3 characters)",
-          },
-          mobile: {
-            type: "string",
-            description: "New mobile number (must be 10 digits)",
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_all_users",
-      description: "Get a list of all registered users in the system",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "navigate_to",
-      description:
-        "Navigate the user to a different page in the app. Available pages: profile, assistant, chat, dashboard",
-      parameters: {
-        type: "object",
-        properties: {
-          page: {
-            type: "string",
-            enum: ["profile", "assistant", "chat", "dashboard"],
-            description: "The page to navigate to",
-          },
-        },
-        required: ["page"],
-      },
-    },
-  },
-];
+// Fallback chatbot without OpenAI - uses pattern matching
+async function handleChatWithoutOpenAI(message, userId, userName) {
+  const lowerMessage = message.toLowerCase();
 
-// Tool execution functions
-async function executeGetUserProfile(userId) {
-  const user = await User.findById(userId);
-  if (!user)
-    return { error: "User not found" };
-  return {
-    username: user.username,
-    mobile: user.mobile,
-    createdAt: user.createdAt,
-  };
-}
-
-async function executeUpdateUserProfile(userId, username, mobile) {
-  const user = await User.findById(userId);
-  if (!user) return { error: "User not found" };
-
-  if (username && username.length < 3) {
-    return { error: "Username must be at least 3 characters" };
-  }
-  if (mobile && !/^\d{10}$/.test(mobile)) {
-    return { error: "Mobile must be 10 digits" };
+  // Profile queries
+  if (
+    lowerMessage.includes("profile") ||
+    lowerMessage.includes("my info") ||
+    lowerMessage.includes("show my")
+  ) {
+    return {
+      message: `I can help you view your profile! Let me get your information...`,
+      action: "navigate",
+      path: "/profile",
+      description: "profile",
+    };
   }
 
-  if (username) user.username = username;
-  if (mobile) user.mobile = mobile;
-  await user.save();
+  // Users list
+  if (
+    lowerMessage.includes("list") ||
+    lowerMessage.includes("all users") ||
+    lowerMessage.includes("users") ||
+    lowerMessage.includes("who")
+  ) {
+    const users = await User.find({}, "username mobile createdAt").sort({
+      createdAt: -1,
+    });
+    const userList = users
+      .map((u) => `• ${u.username} (${u.mobile})`)
+      .join("\n");
+    return {
+      message: `Here are all registered users:\n\n${userList}\n\nTotal: ${users.length} user(s)`,
+      action: null,
+    };
+  }
 
+  // Edit/Update profile
+  if (
+    lowerMessage.includes("edit") ||
+    lowerMessage.includes("update") ||
+    lowerMessage.includes("change")
+  ) {
+    return {
+      message: `Let me take you to your profile where you can edit your information.`,
+      action: "navigate",
+      path: "/profile",
+      description: "profile",
+    };
+  }
+
+  // Chat/Assistant
+  if (
+    lowerMessage.includes("chat") ||
+    lowerMessage.includes("assistant") ||
+    lowerMessage.includes("go to chat")
+  ) {
+    return {
+      message: `Navigating to the chat assistant...`,
+      action: "navigate",
+      path: "/assistant",
+      description: "assistant",
+    };
+  }
+
+  // Help
+  if (
+    lowerMessage.includes("help") ||
+    lowerMessage.includes("what can") ||
+    lowerMessage.includes("how to")
+  ) {
+    return {
+      message: `I can help you with:
+• View your profile - say "show my profile"
+• List all users - say "list all users"
+• Edit your information - say "edit my profile"
+• Navigate to chat - say "go to chat"
+• Logout - say "logout"
+
+What would you like to do?`,
+      action: null,
+    };
+  }
+
+  // Logout
+  if (lowerMessage.includes("logout") || lowerMessage.includes("exit")) {
+    return {
+      message: `You're logging out...`,
+      action: "logout",
+    };
+  }
+
+  // Default response
   return {
-    success: true,
-    message: "Profile updated successfully",
-    user: { username: user.username, mobile: user.mobile },
+    message: `Hi ${userName}! I'm not sure what you're asking. Here are some things I can help with:
+• "Show my profile" - View your profile
+• "List all users" - See registered users
+• "Edit my profile" - Update your information
+• "Go to chat" - Visit the chat page
+• "Help" - Show all options`,
+    action: null,
   };
-}
-
-async function executeListAllUsers() {
-  const users = await User.find({}, "username mobile createdAt").sort({
-    createdAt: -1,
-  });
-  return users.map((u) => ({
-    username: u.username,
-    mobile: u.mobile,
-    joined: u.createdAt?.toDateString(),
-  }));
-}
-
-function executeNavigateTo(page) {
-  const pathMap = {
-    profile: "/profile",
-    assistant: "/assistant",
-    chat: "/chat",
-    dashboard: "/success",
-  };
-  return { success: true, path: pathMap[page] || "/success" };
 }
 
 // Main chat endpoint
 router.post("/chat", verifyToken, async (req, res) => {
   try {
-    const { message, conversationHistory } = req.body;
+    const { message } = req.body;
     if (!message?.trim()) {
       return res.status(400).json({ message: "Message is required" });
     }
 
-    // Prepare messages for OpenAI
-    const messagesForOpenAI = [
-      {
-        role: "system",
-        content: `You are a helpful assistant for a React web application. You help users navigate and use the app features. 
-        
-Current user: ${req.user.username}
-        
-Be friendly, concise, and helpful. When users ask to navigate somewhere or perform actions, use the available tools. 
-If a user asks something that requires a tool call, call the appropriate tool. 
-Always explain what you're doing in a user-friendly way.`,
-      },
-      ...(conversationHistory || []),
-      { role: "user", content: message },
-    ];
+    // Get user info for context
+    const user = await User.findById(req.user.id);
 
-    // Call OpenAI with tools
-    let response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: messagesForOpenAI,
-      tools: tools,
-      tool_choice: "auto",
-      max_tokens: 500,
-    });
+    // Use fallback chatbot
+    const response = await handleChatWithoutOpenAI(
+      message,
+      req.user.id,
+      user?.username || "User"
+    );
 
-    // Process tool calls if present
-    while (
-      response.choices[0]?.finish_reason === "tool_calls" &&
-      response.choices[0]?.message?.tool_calls
-    ) {
-      const toolCalls = response.choices[0].message.tool_calls;
-      const toolResults = [];
-
-      for (const toolCall of toolCalls) {
-        let result;
-        const args = toolCall.function.arguments;
-        const parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
-
-        if (toolCall.function.name === "get_user_profile") {
-          result = await executeGetUserProfile(req.user.id);
-        } else if (toolCall.function.name === "update_user_profile") {
-          result = await executeUpdateUserProfile(
-            req.user.id,
-            parsedArgs.username,
-            parsedArgs.mobile
-          );
-        } else if (toolCall.function.name === "list_all_users") {
-          result = await executeListAllUsers();
-        } else if (toolCall.function.name === "navigate_to") {
-          result = executeNavigateTo(parsedArgs.page);
-          // Store navigation action to return separately
-          if (result.success && result.path) {
-            return res.json({
-              message: `Navigating to ${parsedArgs.page}...`,
-              action: "navigate",
-              path: result.path,
-              description: parsedArgs.page,
-            });
-          }
-        }
-
-        toolResults.push({
-          tool_call_id: toolCall.id,
-          role: "tool",
-          content: JSON.stringify(result),
-        });
-      }
-
-      // Continue conversation with tool results
-      messagesForOpenAI.push({
-        role: "assistant",
-        content: response.choices[0].message.content || "",
-        tool_calls: toolCalls.map((tc) => ({
-          id: tc.id,
-          type: "function",
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments,
-          },
-        })),
-      });
-
-      messagesForOpenAI.push(...toolResults);
-
-      response = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: messagesForOpenAI,
-        tools: tools,
-        tool_choice: "auto",
-        max_tokens: 500,
-      });
-    }
-
-    // Return final response
-    const assistantMessage =
-      response.choices[0]?.message?.content || "Sorry, I couldn't process that.";
-
-    res.json({
-      message: assistantMessage,
-      action: null,
-    });
+    res.json(response);
   } catch (err) {
     console.error("Chat error:", err);
     res.status(500).json({
