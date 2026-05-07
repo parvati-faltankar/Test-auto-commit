@@ -12,7 +12,7 @@ if (fs.existsSync(envFile)) {
     });
 }
 
-const { ChatAnthropic } = require("@langchain/anthropic");
+const { ChatOpenRouter } = require("@langchain/openrouter");
 const { createReactAgent } = require("@langchain/langgraph/prebuilt");
 const { HumanMessage, AIMessage, SystemMessage } = require("@langchain/core/messages");
 const { tool } = require("@langchain/core/tools");
@@ -112,6 +112,31 @@ const sendOtpTool = tool(
 );
 
 // ──────────────────────────────────────────────
+// TOOL 5: List All Users
+// ──────────────────────────────────────────────
+const listUsersTool = tool(
+  async () => {
+    try {
+      const res = await fetch(`${API_BASE}/users`);
+      const data = await res.json();
+      if (!res.ok) return `Error: ${data.message}`;
+      if (!data.users?.length) return "No users registered yet.";
+      const list = data.users
+        .map((u, i) => `${i + 1}. ${u.username} | mobile: ${u.mobile} | joined: ${u.joined}`)
+        .join("\n");
+      return `${data.count} registered user(s):\n\n${list}`;
+    } catch (e) {
+      return `Error contacting server: ${e.message}`;
+    }
+  },
+  {
+    name: "list_users",
+    description: "List all registered users. Call this when the user asks to see all users or user list.",
+    schema: z.object({}),
+  }
+);
+
+// ──────────────────────────────────────────────
 // TOOL 4: Verify OTP
 // ──────────────────────────────────────────────
 const verifyOtpTool = tool(
@@ -152,6 +177,7 @@ You help users with:
 1. REGISTER - Create a new account (need: username, password, mobile)
 2. LOGIN with username/password (need: username, password)  
 3. LOGIN with mobile OTP (need: mobile → send OTP → get OTP from user)
+4. LIST USERS - Show all registered users
 
 Rules:
 - Ask for missing info one step at a time
@@ -164,13 +190,12 @@ Rules:
 // ──────────────────────────────────────────────
 // Initialize LLM
 // ──────────────────────────────────────────────
-const llm = new ChatAnthropic({
-  modelName: "claude-3-5-sonnet-20241022",
-  temperature: 0,
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-});
+const llm = new ChatOpenRouter(
+  "openai/gpt-oss-120b:free",
+  { temperature: 0 }
+);
 
-const tools = [registerUserTool, loginUserTool, sendOtpTool, verifyOtpTool];
+const tools = [registerUserTool, loginUserTool, sendOtpTool, verifyOtpTool, listUsersTool];
 
 // ──────────────────────────────────────────────
 // Agent runner

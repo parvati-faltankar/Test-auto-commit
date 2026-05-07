@@ -21,7 +21,7 @@ interface Message {
   timestamp: number;
 }
 
-const API = "http://localhost:5000/api";
+const API = "http://localhost:5000";
 
 export default function Chatbot() {
   const [messages, setMessages] = useState<Message[]>([
@@ -63,7 +63,7 @@ export default function Chatbot() {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API}/chat`, {
+      const response = await fetch(`${API}/agent/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
