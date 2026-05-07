@@ -15,6 +15,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const authRoutes = require("./routes/auth");
+const chatRoutes = require("./routes/chat");
 const { runAgent, resetSession } = require("./agent");
 
 const app = express();
@@ -39,6 +40,9 @@ app.use(express.json());
 
 // ── Auth Routes ─────────────────────────────
 app.use("/api", authRoutes);
+
+// ── Chat Routes ──────────────────────────────
+app.use("/api", chatRoutes);
 
 // ── Agent Chat Endpoint ──────────────────────
 app.post("/agent/chat", async (req, res) => {
